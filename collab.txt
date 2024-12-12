@@ -1,0 +1,189 @@
+from google.colab import drive
+drive.mount('/content/drive')
+
+!pip install tensorflow opencv-python scikit-learn
+
+import pandas as pd
+import os
+
+# Load the train data CSV file
+train_data = pd.read_csv("/content/drive/MyDrive/DOG/train_data.csv")
+
+# Assuming all images are in the 'train' folder
+train_folder = '/content/drive/MyDrive/DOG/train/'
+
+# Create a new column 'ImagePath' by combining the folder path with the image name
+train_data['ImagePath'] = train_data['nose print image'].apply(lambda x: os.path.join(train_folder, x))
+
+# Display the first few rows to verify the paths
+print(train_data.head())
+
+from tensorflow.keras.preprocessing import image
+from tensorflow.keras.applications.resnet50 import preprocess_input
+from tensorflow.keras.applications import ResNet50
+import numpy as np
+
+# Load the pre-trained ResNet50 model (without the top classification layer)
+model = ResNet50(weights='imagenet', include_top=False, pooling='avg')
+
+# Function to extract features from an image
+def extract_features(img_path):
+    # Load image and resize it to 224x224 (expected input size for ResNet50)
+    img = image.load_img(img_path, target_size=(224, 224))
+
+    # Convert the image to a numpy array and add batch dimension (required by the model)
+    img_array = image.img_to_array(img)
+    img_array = np.expand_dims(img_array, axis=0)  # Add batch dimension
+
+    # Preprocess the image for ResNet50 (scaling pixel values, etc.)
+    img_array = preprocess_input(img_array)
+
+    # Extract features using the pre-trained ResNet50 model
+    features = model.predict(img_array)
+
+    # Flatten the features to a 1D array for easier comparison
+    return features.flatten()
+
+import os
+import numpy as np
+
+dog_features = {}  # Dictionary to store features by DogID
+
+for _, row in train_data.iterrows():
+    img_path = row['ImagePath']
+    dog_id = row['dog ID']
+
+    # Verify if the image exists
+    img_full_path = os.path.join('/content/drive/MyDrive/DOG/train', img_path)  # Full image path
+
+    if not os.path.exists(img_full_path):  # If the image is not found, skip this row
+        print(f"Image not found: {img_full_path}")
+        continue  # Skip to the next image if the current one is missing
+
+    # Extract features for the image
+    features = extract_features(img_full_path)
+
+    # Store features for each dog
+    if dog_id not in dog_features:
+        dog_features[dog_id] = []
+    dog_features[dog_id].append(features)
+
+# Save the features to a file for later use
+np.save('/content/drive/MyDrive/DOG/dog_features.npy', dog_features)
+print("Features extracted and saved successfully!")
+
+
+from google.colab import files
+import cv2
+import numpy as np
+
+def is_image_sharp(image, threshold=100.0):
+    """
+    Checks if the image is sharp based on the Laplacian variance method.
+
+    Parameters:
+        image (numpy array): Input image.
+        threshold (float): Minimum variance threshold for acceptable sharpness.
+
+    Returns:
+        bool: True if the image is sharp, False otherwise.
+        float: Calculated sharpness value (Laplacian variance).
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)  # Convert to grayscale
+    variance = cv2.Laplacian(gray, cv2.CV_64F).var()  # Compute Laplacian variance
+    return variance > threshold, variance
+
+def enhance_image(image):
+    """
+    Enhances the image by applying sharpening.
+
+    Parameters:
+        image (numpy array): Input image.
+
+    Returns:
+        numpy array: Enhanced (sharpened) image.
+    """
+    kernel = np.array([[0, -1, 0],
+                       [-1, 5, -1],
+                       [0, -1, 0]])  # Sharpening kernel
+    enhanced_image = cv2.filter2D(image, -1, kernel)  # Apply sharpening filter
+    return enhanced_image
+
+def upload_and_process_image():
+    """
+    Handles image upload, quality check, and enhancement.
+
+    Returns:
+        str: Path of the processed image if quality is acceptable.
+        None: If the quality is low and user needs to upload again.
+    """
+    uploaded = files.upload()  # Upload image
+    img_path = list(uploaded.keys())[0]  # Get the uploaded image path
+
+    # Load the uploaded image using OpenCV
+    image = cv2.imread(img_path)
+    if image is None:
+        print("Error: Could not read the uploaded image.")
+        return None
+
+    # Check image sharpness
+    sharp, sharpness_value = is_image_sharp(image)
+    print(f"Image sharpness value: {sharpness_value}")
+
+    if not sharp:
+        print("Low-quality image detected. Please upload a sharper image.")
+        return None
+
+    # Enhance the image quality
+    enhanced_image = enhance_image(image)
+
+    # Save the enhanced image
+    processed_img_path = "enhanced_" + img_path
+    cv2.imwrite(processed_img_path, enhanced_image)
+    print(f"Image quality enhanced and saved as {processed_img_path}")
+
+    return processed_img_path
+
+# Modified section in the original code
+print("Please upload the image for testing:")
+new_img_path = None
+
+while new_img_path is None:
+    new_img_path = upload_and_process_image()  # Ensure quality before proceeding
+
+print(f"Processed image ready for matching: {new_img_path}")
+
+
+new_image_features = extract_features(new_img_path)
+
+
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+
+# Load stored dog features from file
+stored_dog_features = np.load('/content/drive/MyDrive/DOG/dog_features.npy', allow_pickle=True).item()
+
+# Compare the new image with each dog in the database
+similarities = {}
+for dog_id, features_list in stored_dog_features.items():
+    for features in features_list:
+        # Compute cosine similarity (higher value means more similar)
+        similarity = cosine_similarity([new_image_features], [features])[0][0]
+        similarities[dog_id] = similarity
+
+# Find the dog with the highest similarity
+matched_dog_id = max(similarities, key=similarities.get)
+similarity_score = similarities[matched_dog_id]
+print(f"Matched DogID: {matched_dog_id}")
+print(f"Similarity Score: {similarity_score}")
+
+threshold = 0.8  # Define your threshold for a valid match
+
+def is_match(similarity_score):
+    if similarity_score > threshold:
+        print("Match found!")
+    else:
+        print("No match found.")
+
+is_match(similarity_score)
+
