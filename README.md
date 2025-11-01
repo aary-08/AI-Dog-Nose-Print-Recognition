@@ -31,7 +31,7 @@ This project demonstrates a machine learning pipeline to match a dog's nose prin
    ```
 
 3. Mount Google Drive in Colab (if using Google Colab):
-  -Folders are already given.  
+-Folders are already given.  
 -You can upload them in your drive and then you can mount the drive.  
 -Link to download the train folder:  
 -https://drive.google.com/drive/folders/1Sw0vNWYI84LTsZG22MdG2_CuyS7ZHwd6?usp=sharing
